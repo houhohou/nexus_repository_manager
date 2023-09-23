@@ -1,0 +1,155 @@
+#Update
+apt-get update -y
+apt-get install openjdk-8-jdk -y
+
+
+# then you should check 
+java -version
+#openjdk version "1.8.0_282"
+#OpenJDK Runtime Environment (build 1.8.0_282-8u282-b08-0ubuntu1~20.04-b08)
+#OpenJDK 64-Bit Server VM (build 25.282-b08, mixed mode)
+
+#Nexus install
+#create nexus user
+useradd -M -d /opt/nexus -s /bin/bash -r nexus
+#nexus user can use sudo without passowrd
+echo "nexus ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/nexus
+
+#create nexus directory & nexus tar download whth wget
+mkdir /opt/nexus
+wget https://sonatype-download.global.ssl.fastly.net/repository/downloads-prod-group/3/nexus-3.29.2-02-unix.tar.gz
+
+#After download, open gz in /opt/nexus
+tar xzf nexus-3.29.2-02-unix.tar.gz -C /opt/nexus --strip-components=1
+
+#owner change 
+chown -R nexus:nexus /opt/nexus
+
+#change file set ( java max memory size change )
+vi /opt/nexus/bin/nexus.vmoptions
+
+-Xms1024m
+-Xmx1024m
+-XX:MaxDirectMemorySize=1024m
+-XX:+UnlockDiagnosticVMOptions
+-XX:+LogVMOutput
+-XX:LogFile=./sonatype-work/nexus3/log/jvm.log
+-XX:-OmitStackTraceInFastThrow
+-Djava.net.preferIPv4Stack=true
+-Dkaraf.home=.
+-Dkaraf.base=.
+-Dkaraf.etc=etc/karaf
+-Djava.util.logging.config.file=etc/karaf/java.util.logging.properties
+-Dkaraf.data=./sonatype-work/nexus3
+-Dkaraf.log=./sonatype-work/nexus3/log
+-Djava.io.tmpdir=./sonatype-work/nexus3/tmp
+-Dkaraf.startLocalConsole=false
+
+#change nexus.rc file
+cat > /opt/nexus/bin/nexus.rc << EOF
+run_as_user="nexus"
+EOF
+
+#nexus service start
+sudo -u nexus /opt/nexus/bin/nexus start
+
+#You shoud chenck this log
+tail -f /opt/nexus/sonatype-work/nexus3/log/nexus.log
+2023-09-23 06:23:10,794+0000 INFO  [FelixStartLevel]  *SYSTEM org.sonatype.nexus.quartz.internal.task.QuartzTaskInfo - Task 'Task log cleanup' [tasklog.cleanup] : state=WAITING
+2023-09-23 06:23:10,813+0000 INFO  [FelixStartLevel]  *SYSTEM org.sonatype.nexus.scheduling.TaskSchedulerImpl - Task 'Task log cleanup' [tasklog.cleanup] scheduled: cron
+2023-09-23 06:23:10,821+0000 INFO  [FelixStartLevel]  *SYSTEM org.sonatype.nexus.quartz.internal.task.QuartzTaskInfo - Task 'Cleanup service' [repository.cleanup] : state=WAITING
+2023-09-23 06:23:10,829+0000 INFO  [FelixStartLevel]  *SYSTEM org.sonatype.nexus.scheduling.TaskSchedulerImpl - Task 'Cleanup service' [repository.cleanup] scheduled: cron
+2023-09-23 06:23:10,840+0000 INFO  [FelixStartLevel]  *SYSTEM org.sonatype.nexus.quartz.internal.task.QuartzTaskInfo - Task 'Storage facet cleanup' [repository.storage-facet-cleanup] : state=WAITING
+2023-09-23 06:23:10,844+0000 INFO  [FelixStartLevel]  *SYSTEM org.sonatype.nexus.scheduling.TaskSchedulerImpl - Task 'Storage facet cleanup' [repository.storage-facet-cleanup] scheduled: cron
+2023-09-23 06:23:10,859+0000 INFO  [FelixStartLevel]  *SYSTEM org.sonatype.nexus.quartz.internal.QuartzSchedulerSPI - Scheduler put into ready mode
+
+# at this time, nexus should beggin and 8081 port ready, chect this
+ss -altnp | grep 8081
+
+#Stop to nexus 
+/opt/nexus/bin/nexus stop
+
+##For the manage to nexus, 
+
+#create service file
+cat > /etc/systemd/system/nexus.service << EOF
+[Unit]
+Description=nexus service
+After=network.target
+
+[Service]
+Type=forking
+LimitNOFILE=65536
+ExecStart=/opt/nexus/bin/nexus start
+ExecStop=/opt/nexus/bin/nexus stop
+User=nexus
+Restart=on-abort
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+#systemd daemon reload
+systemctl daemon-reload
+
+#nexus reload
+systemctl start nexus
+systemctl enable nexus
+
+##ngunx revirce proxy setting
+apt-get install nginx -y
+
+#NGINX Virtual host setting 
+
+cat > /etc/nginx/conf.d/nexus.conf << EOF
+upstream backend {
+  server 127.0.0.1:8081;
+}
+
+server {
+    listen 80;
+    server_name nexus.example.com;
+
+    location / {
+        proxy_pass http://backend/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$http_host;
+
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forward-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forward-Proto http;
+        proxy_set_header X-Nginx-Proxy true;
+
+        proxy_redirect off;
+    }
+}
+EOF
+
+#nginx setting file check 
+nginx -t
+#should output 
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successfu
+
+sudo ln -s /etc/nginx/sites-available/nexus /etc/nginx/sites-enabled/
+sudo nginx -t
+
+
+systemctl restart nginx
+
+#copy the passowrd from output
+cat /opt/nexus/sonatype-work/nexus3/admin.password
+
+#then you can use GUI from nexus
+ID : admin
+password : $COPY PASSOWRD
+
+
+
+
+
+
+
+
